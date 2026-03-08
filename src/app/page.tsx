@@ -62,22 +62,28 @@ export default function Home() {
       return;
     }
 
-    function updatePosition() {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setError(null);
-          fetchAndAddEntry(position.coords.latitude, position.coords.longitude);
-        },
-        (err) => {
-          setError(err.message);
-        },
-        { enableHighAccuracy: true }
-      );
-    }
+    let lastSampleTime = 0;
 
-    updatePosition();
-    const interval = setInterval(updatePosition, 10000);
-    return () => clearInterval(interval);
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        setError(null);
+        const now = Date.now();
+        if (now - lastSampleTime >= 10000) {
+          lastSampleTime = now;
+          fetchAndAddEntry(position.coords.latitude, position.coords.longitude);
+        }
+      },
+      (err) => {
+        setError(err.message);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+      }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
   }, [fetchAndAddEntry]);
 
   const latest = entries[0] ?? null;
