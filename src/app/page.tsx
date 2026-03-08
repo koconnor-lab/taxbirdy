@@ -1,34 +1,30 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
-interface GpsState {
-  latitude: number | null;
-  longitude: number | null;
-  error: string | null;
-  lastUpdated: Date | null;
-}
-
-interface LocationInfo {
+interface LocationEntry {
+  latitude: number;
+  longitude: number;
+  address: string | null;
   locality: string | null;
   state: string | null;
   country: string | null;
+  timestamp: Date;
 }
 
-export default function Home() {
-  const [gps, setGps] = useState<GpsState>({
-    latitude: null,
-    longitude: null,
-    error: null,
-    lastUpdated: null,
-  });
-  const [location, setLocation] = useState<LocationInfo>({
-    locality: null,
-    state: null,
-    country: null,
-  });
+const MAX_ENTRIES = 100;
 
-  const reverseGeocode = useCallback(async (lat: number, lon: number) => {
+export default function Home() {
+  const [error, setError] = useState<string | null>(null);
+  const [entries, setEntries] = useState<LocationEntry[]>([]);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const fetchAndAddEntry = useCallback(async (lat: number, lon: number) => {
+    let address: string | null = null;
+    let locality: string | null = null;
+    let state: string | null = null;
+    let country: string | null = null;
+
     try {
       const res = await fetch(
         `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`,
@@ -36,36 +32,44 @@ export default function Home() {
       );
       const data = await res.json();
       const addr = data.address;
-      setLocation({
-        locality: addr.city || addr.town || addr.village || addr.hamlet || null,
-        state: addr.state || null,
-        country: addr.country || null,
-      });
+      address = data.display_name || null;
+      locality = addr.city || addr.town || addr.village || addr.hamlet || null;
+      state = addr.state || null;
+      country = addr.country || null;
     } catch {
-      setLocation({ locality: null, state: null, country: null });
+      // geocoding failed, coordinates still recorded
     }
+
+    const entry: LocationEntry = {
+      latitude: lat,
+      longitude: lon,
+      address,
+      locality,
+      state,
+      country,
+      timestamp: new Date(),
+    };
+
+    setEntries((prev) => {
+      const updated = [entry, ...prev];
+      return updated.slice(0, MAX_ENTRIES);
+    });
   }, []);
 
   useEffect(() => {
     if (!navigator.geolocation) {
-      setGps((prev) => ({ ...prev, error: "Geolocation is not supported by this browser." }));
+      setError("Geolocation is not supported by this browser.");
       return;
     }
 
     function updatePosition() {
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          const { latitude, longitude } = position.coords;
-          setGps({
-            latitude,
-            longitude,
-            error: null,
-            lastUpdated: new Date(),
-          });
-          reverseGeocode(latitude, longitude);
+          setError(null);
+          fetchAndAddEntry(position.coords.latitude, position.coords.longitude);
         },
         (err) => {
-          setGps((prev) => ({ ...prev, error: err.message, lastUpdated: new Date() }));
+          setError(err.message);
         },
         { enableHighAccuracy: true }
       );
@@ -74,38 +78,87 @@ export default function Home() {
     updatePosition();
     const interval = setInterval(updatePosition, 10000);
     return () => clearInterval(interval);
-  }, [reverseGeocode]);
+  }, [fetchAndAddEntry]);
 
-  const locationParts = [location.locality, location.state, location.country].filter(Boolean);
+  const latest = entries[0] ?? null;
+  const locationParts = latest
+    ? [latest.locality, latest.state, latest.country].filter(Boolean)
+    : [];
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-col items-center gap-8 p-8">
+      <main className="flex flex-col items-center gap-8 p-8 w-full max-w-2xl">
         <h1 className="text-4xl font-bold text-black dark:text-white">TaxBirdy</h1>
-        <div className="rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+
+        <div className="w-full rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
           <h2 className="mb-4 text-lg font-semibold text-zinc-700 dark:text-zinc-300">
-            GPS Coordinates
+            Current Location
           </h2>
-          {gps.error ? (
-            <p className="text-red-500">{gps.error}</p>
-          ) : gps.latitude !== null ? (
+          {error ? (
+            <p className="text-red-500">{error}</p>
+          ) : latest ? (
             <div className="flex flex-col gap-2 text-center">
               <p className="text-3xl font-mono text-black dark:text-white">
-                {gps.latitude.toFixed(6)}°, {gps.longitude!.toFixed(6)}°
+                {latest.latitude.toFixed(6)}°, {latest.longitude.toFixed(6)}°
               </p>
               {locationParts.length > 0 && (
                 <p className="text-xl text-zinc-700 dark:text-zinc-300">
                   {locationParts.join(", ")}
                 </p>
               )}
-              <p className="text-sm text-zinc-500">
-                Last updated: {gps.lastUpdated?.toLocaleTimeString()}
+              {latest.address && (
+                <p className="text-sm text-zinc-500">{latest.address}</p>
+              )}
+              <p className="text-xs text-zinc-400">
+                {latest.timestamp.toLocaleTimeString()} · Refreshes every 10s
               </p>
-              <p className="text-xs text-zinc-400">Refreshes every 10 seconds</p>
             </div>
           ) : (
             <p className="text-zinc-500">Requesting location...</p>
           )}
+        </div>
+
+        <div className="w-full rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+          <h2 className="px-6 pt-6 pb-2 text-lg font-semibold text-zinc-700 dark:text-zinc-300">
+            Location History ({entries.length}/{MAX_ENTRIES})
+          </h2>
+          <div
+            ref={listRef}
+            className="max-h-96 overflow-y-auto px-6 pb-6"
+          >
+            {entries.length === 0 ? (
+              <p className="text-zinc-500 text-sm py-2">No entries yet...</p>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {entries.map((entry, i) => {
+                  const parts = [entry.locality, entry.state, entry.country].filter(Boolean);
+                  return (
+                    <div
+                      key={i}
+                      className="flex flex-col gap-0.5 border-b border-zinc-100 pb-3 last:border-0 dark:border-zinc-800"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-sm text-black dark:text-white">
+                          {entry.latitude.toFixed(6)}°, {entry.longitude.toFixed(6)}°
+                        </span>
+                        <span className="text-xs text-zinc-400">
+                          {entry.timestamp.toLocaleTimeString()}
+                        </span>
+                      </div>
+                      {parts.length > 0 && (
+                        <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                          {parts.join(", ")}
+                        </span>
+                      )}
+                      {entry.address && (
+                        <span className="text-xs text-zinc-400">{entry.address}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </main>
     </div>
