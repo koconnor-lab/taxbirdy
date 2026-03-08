@@ -10,14 +10,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 class LocationViewModel(application: Application) : AndroidViewModel(application) {
 
     private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(application)
-    private val httpClient = OkHttpClient()
 
     private val _entries = MutableStateFlow<List<LocationEntry>>(emptyList())
     val entries: StateFlow<List<LocationEntry>> = _entries
@@ -82,21 +81,23 @@ class LocationViewModel(application: Application) : AndroidViewModel(application
 
     private fun reverseGeocode(lat: Double, lon: Double): LocationEntry? {
         return try {
-            val url = "https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lon&format=json&addressdetails=1"
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "TaxBirdy/1.0")
-                .header("Accept-Language", "en")
-                .build()
+            val url = URL("https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lon&format=json&addressdetails=1")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.setRequestProperty("User-Agent", "TaxBirdy/1.0")
+            connection.setRequestProperty("Accept-Language", "en")
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
 
-            val response = httpClient.newCall(request).execute()
-            val json = JSONObject(response.body?.string() ?: return null)
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            connection.disconnect()
+
+            val json = JSONObject(body)
             val addr = json.optJSONObject("address")
 
             LocationEntry(
                 latitude = lat,
                 longitude = lon,
-                address = json.optString("display_name", null),
+                address = json.optString("display_name", "").takeIf { it.isNotEmpty() },
                 locality = addr?.optString("city")?.takeIf { it.isNotEmpty() }
                     ?: addr?.optString("town")?.takeIf { it.isNotEmpty() }
                     ?: addr?.optString("village")?.takeIf { it.isNotEmpty() }
